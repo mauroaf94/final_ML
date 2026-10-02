@@ -4,19 +4,24 @@ import numpy as np
 import joblib
 
 # Configuración de la página
-st.set_page_config(page_title="Predicción Saber 11 - SGD", layout="wide")
-st.title("🎯 Predictor de Puntaje Global - Saber 11")
-st.write("Esta aplicación permite ingresar todas las variables del dataset para estimar el puntaje global utilizando el modelo SGDRegressor entrenado.")
+st.set_page_config(page_title="Predicción Saber 11 - SGD & LogReg", layout="wide")
+st.title("🎯 Predictor de Desempeño y Puntaje Global - Saber 11")
+st.write("Esta aplicación evalúa las características del estudiante para estimar su puntaje global (SGD Regressor) y clasificar su nivel de desempeño (Regresión Logística).")
 
-# 1. Cargar el modelo serializado
+# 1. Cargar ambos modelos serializados
 @st.cache_resource
-def load_model():
-    return joblib.load('sgd_regressor_model.joblib')
+def load_models():
+    sgd_model = joblib.load('sgd_regressor_model.joblib')
+    logreg_model = joblib.load('modelo_logistico_saber11.joblib')  # Nombre de tu archivo de Regresión Logística
+    return sgd_model, logreg_model
 
-model = load_model()
+try:
+    sgd_model, logreg_model = load_models()
+except Exception as e:
+    st.error("Error al cargar los modelos (.joblib). Verifica que ambos archivos estén en el directorio de la aplicación.")
+    st.stop()
 
 # 2. Cargar las columnas de características para mapear de forma dinámica
-# Leeremos un registro de muestra para obtener los nombres exactos de las columnas
 @st.cache_data
 def get_feature_structure():
     df_temp = pd.read_csv("microdatos_saber_11_procesados.csv", nrows=1)
@@ -29,31 +34,28 @@ def get_feature_structure():
 try:
     feature_cols = get_feature_structure()
 except Exception as e:
-    # Fallback si el archivo no está en la ruta por defecto
     st.error("No se pudo cargar el archivo de datos para mapear las columnas. Asegúrate de que 'microdatos_saber_11_procesados.csv' esté en el mismo directorio.")
     st.stop()
 
-# Agruparemos las columnas codificadas por su prefijo original para crear selectores intuitivos
+# Variables con configuración manual/específica
+CUSTOM_KEYS = ["estu_genero", "cole_area_ubicacion", "estu_privado_libertad"]
+
+# Agrupar el resto de columnas de manera dinámica
 categories_map = {}
 for col in feature_cols:
     if '_' in col:
-        # Buscamos el último grupo o dividimos por el prefijo común
+        # Evitar mapear automáticamente las variables personalizadas
+        if any(col.startswith(ck) for ck in CUSTOM_KEYS):
+            continue
+            
         parts = col.split('_')
-        # Agrupaciones lógicas basadas en los nombres comunes del ICFES
         if col.startswith("estu_depto_reside"):
             prefix, option = "estu_depto_reside", col.replace("estu_depto_reside_", "")
         elif col.startswith("cole_caracter"):
             prefix, option = "cole_caracter", col.replace("cole_caracter_", "")
-        elif col.startswith("cole_area_ubicacion"):
-            prefix, option = "cole_area_ubicacion", col.replace("cole_area_ubicacion_", "")
         elif col.startswith("cole_jornada"):
             prefix, option = "cole_jornada", col.replace("cole_jornada_", "")
-        elif col.startswith("estu_genero"):
-            prefix, option = "estu_genero", col.replace("estu_genero_", "")
-        elif col.startswith("estu_privado_libertad"):
-            prefix, option = "estu_privado_libertad", col.replace("estu_privado_libertad_", "")
         else:
-            # Cualquier otra variable codificada
             prefix = "_".join(parts[:-1])
             option = parts[-1]
         
@@ -61,44 +63,43 @@ for col in feature_cols:
             categories_map[prefix] = []
         categories_map[prefix].append(option)
 
-# Añadimos opciones para representar el valor 'por defecto' o valor base que no tiene columna (el que se eliminó en One-Hot)
+# Añadir valor por defecto para el resto de variables categóricas dinámicas
 for key in categories_map:
     categories_map[key] = sorted(list(set(categories_map[key])))
     categories_map[key].insert(0, "Otro / No especificado")
 
-# Traducimos las variables a nombres legibles para la interfaz de usuario
-labels_map = {
-    "estu_depto_reside": "Departamento de Residencia",
-    "cole_caracter": "Carácter del Colegio",
-    "cole_area_ubicacion": "Área de Ubicación del Colegio",
-    "cole_jornada": "Jornada del Colegio",
-    "estu_genero": "Género",
-    "estu_privado_libertad": "¿Estudiante Privado de la Libertad?"
-}
-
 st.header("📋 Formulario de Entrada de Datos")
 user_inputs = {}
 
-# Dividir el formulario en dos columnas para una mejor presentación visual
+# Layout en dos columnas
 col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("Información del Estudiante")
-    for key in ["estu_genero", "estu_depto_reside", "estu_privado_libertad"]:
-        if key in categories_map:
-            label = labels_map.get(key, key.replace("_", " ").title())
-            user_inputs[key] = st.selectbox(label, categories_map[key])
+    # 1. Género: opciones 'f' y 'm'
+    user_inputs["estu_genero"] = st.selectbox("Género", ["f", "m"])
+    
+    # Departamento de Residencia
+    if "estu_depto_reside" in categories_map:
+        user_inputs["estu_depto_reside"] = st.selectbox("Departamento de Residencia", categories_map["estu_depto_reside"])
+    
+    # 2. Privado de la Libertad: opciones 'no' y 'si'
+    user_inputs["estu_privado_libertad"] = st.selectbox("¿Estudiante Privado de la Libertad?", ["no", "si"])
 
 with col2:
     st.subheader("Información del Colegio")
-    for key in ["cole_caracter", "cole_area_ubicacion", "cole_jornada"]:
-        if key in categories_map:
-            label = labels_map.get(key, key.replace("_", " ").title())
-            user_inputs[key] = st.selectbox(label, categories_map[key])
+    if "cole_caracter" in categories_map:
+        user_inputs["cole_caracter"] = st.selectbox("Carácter del Colegio", categories_map["cole_caracter"])
+    
+    # 3. Área de Ubicación: opciones 'rural' y 'urbano'
+    user_inputs["cole_area_ubicacion"] = st.selectbox("Área de Ubicación del Colegio", ["rural", "urbano"])
+    
+    if "cole_jornada" in categories_map:
+        user_inputs["cole_jornada"] = st.selectbox("Jornada del Colegio", categories_map["cole_jornada"])
 
-# Procesar el resto de variables del dataset que no se agruparon de forma predeterminada
+# Procesar el resto de variables
 st.subheader("Otras características del entorno")
-remaining_keys = [k for k in categories_map.keys() if k not in ["estu_genero", "estu_depto_reside", "estu_privado_libertad", "cole_caracter", "cole_area_ubicacion", "cole_jornada"]]
+remaining_keys = [k for k in categories_map.keys() if k not in ["estu_depto_reside", "cole_caracter", "cole_jornada"]]
 
 if remaining_keys:
     cols_rem = st.columns(3)
@@ -107,24 +108,74 @@ if remaining_keys:
             label = key.replace("_", " ").title()
             user_inputs[key] = st.selectbox(label, categories_map[key])
 
-# 3. Realizar predicción
+# 3. Realizar predicción con ambos modelos
 st.markdown("---")
-if st.button("🚀 Estimar Puntaje Global", use_container_width=True):
-    # Inicializar el vector de entrada con ceros para las 111 características
+if st.button("🚀 Evaluar Estudiante", use_container_width=True):
+    # Vector de 0s para todas las características
     input_vector = np.zeros((1, len(feature_cols)))
     
-    # Llenar el vector con un 1 en la posición donde coincida la selección del usuario
+    # A. Mapeo específico de los selectores requeridos
+    if user_inputs["estu_genero"] == "m" and "estu_genero_m" in feature_cols:
+        input_vector[0, feature_cols.index("estu_genero_m")] = 1
+
+    if user_inputs["cole_area_ubicacion"] == "urbano" and "cole_area_ubicacion_urbano" in feature_cols:
+        input_vector[0, feature_cols.index("cole_area_ubicacion_urbano")] = 1
+
+    if user_inputs["estu_privado_libertad"] == "si" and "estu_privado_libertad_s" in feature_cols:
+        input_vector[0, feature_cols.index("estu_privado_libertad_s")] = 1
+
+    # B. Mapeo del resto de características
     for key, selected_value in user_inputs.items():
-        if selected_value != "Otro / No especificado":
-            # Reconstruimos el nombre exacto de la columna codificada
+        if key not in CUSTOM_KEYS and selected_value != "Otro / No especificado":
             expected_col_name = f"{key}_{selected_value}"
             if expected_col_name in feature_cols:
                 col_index = feature_cols.index(expected_col_name)
                 input_vector[0, col_index] = 1
 
-    # Generar predicción con el modelo SGDRegressor
-    prediction = model.predict(input_vector)[0]
+    # 1. Predicción del Puntaje Global (SGD Regressor)
+    score_prediction = sgd_model.predict(input_vector)[0]
     
-    # Mostrar el resultado final
+    # 2. Predicción de Clasificación de Desempeño (Regresión Logística)
+    class_prediction = logreg_model.predict(input_vector)[0]
+    
+    # Probabilidad estimada de pertenecer a Alto Desempeño (Clase 1)
+    if hasattr(logreg_model, "predict_proba"):
+        prob_alto = logreg_model.predict_proba(input_vector)[0][1] * 100
+    else:
+        prob_alto = None
+
+    # Mostrar Resultados
     st.balloons()
-    st.markdown(f"<div style='text-align: center;'><h2>📊 Puntaje Global Estimado:</h2><h1 style='color: #FF4B4B;'>{prediction:.2f} / 500</h1></div>", unsafe_allow_html=True)
+    res_col1, res_col2 = st.columns(2)
+    
+    with res_col1:
+        st.markdown(
+            f"""
+            <div style='text-align: center; border: 2px solid #4CAF50; padding: 15px; border-radius: 10px;'>
+                <h3>📊 Puntaje Global Estimado (SGD)</h3>
+                <h1 style='color: #2E7D32;'>{score_prediction:.2f} / 500</h1>
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
+        
+    with res_col2:
+        if class_prediction == 1:
+            badge_color = "#2E7D32"
+            texto_desempeno = "Alto Desempeño 📈"
+        else:
+            badge_color = "#C62828"
+            texto_desempeno = "Bajo Desempeño 📉"
+            
+        prob_str = f"<p style='margin: 0; font-size: 14px;'>Probabilidad de Alto Desempeño: <b>{prob_alto:.1f}%</b></p>" if prob_alto is not None else ""
+        
+        st.markdown(
+            f"""
+            <div style='text-align: center; border: 2px solid {badge_color}; padding: 15px; border-radius: 10px;'>
+                <h3>🏷️ Clasificación de Desempeño (LogReg)</h3>
+                <h1 style='color: {badge_color};'>{texto_desempeno}</h1>
+                {prob_str}
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
